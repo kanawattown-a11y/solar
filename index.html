@@ -57,7 +57,7 @@
 
         // 2. خلفية فضائية ديناميكية (CubeMap) من مجلد محلي
         const cubeTextureLoader = new THREE.CubeTextureLoader();
-        const cubeMap = cubeTextureLoader.setPath('cubemap/').load([
+        const cubeMap = cubeTextureLoader.setPath('./').load([
             'right.jpg', // Right
             'left.jpg', // Left
             'top.jpg', // Top
@@ -219,3 +219,4 @@
     </script>
 </body>
 </html>
+
