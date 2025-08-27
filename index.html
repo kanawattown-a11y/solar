@@ -3,16 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>المنظومة الشمسية ثلاثية الأبعاد</title>
+    <title>المنظومة الشمسية الواقعية (نسخة محلية)</title>
     <style>
-        body { margin: 0; background-color: #000; }
+        body { margin: 0; background-color: #000; overflow: hidden; }
         canvas { display: block; }
         .label {
             color: #fff;
-            font-family: sans-serif;
-            padding: 2px;
-            background: rgba(0, 0, 0, 0.5);
-            border-radius: 4px;
+            font-family: 'Arial', sans-serif;
+            padding: 5px 10px;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: 5px;
+            font-size: 14px;
+            text-shadow: 0 0 5px #000;
         }
     </style>
 </head>
@@ -29,151 +31,189 @@
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
-        // إعداد المشهد، الكاميرا، والعارض
+        // 1. إعداد المشهد والكاميرا والعارض
         const scene = new THREE.Scene( );
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 3000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ReinhardToneMapping;
+        renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
-        // عارض التسميات
         const labelRenderer = new CSS2DRenderer();
         labelRenderer.setSize(window.innerWidth, window.innerHeight);
         labelRenderer.domElement.style.position = 'absolute';
         labelRenderer.domElement.style.top = '0px';
         document.body.appendChild(labelRenderer.domElement);
 
-        // أدوات التحكم بالمدار
         const controls = new OrbitControls(camera, labelRenderer.domElement);
         controls.enableDamping = true;
+        controls.minDistance = 20;
+        controls.maxDistance = 800;
 
-        // تحميل صورة الخلفية (النجوم)
+        // 2. خلفية فضائية ديناميكية (CubeMap) من مجلد محلي
+        const cubeTextureLoader = new THREE.CubeTextureLoader();
+        const cubeMap = cubeTextureLoader.setPath('cubemap/').load([
+            'right.jpg', // Right
+            'left.jpg', // Left
+            'top.jpg', // Top
+            'bottom.jpg', // Bottom
+            'front.jpg', // Front
+            'back.jpg'  // Back
+        ]);
+        scene.background = cubeMap;
+
         const textureLoader = new THREE.TextureLoader();
-        const starTexture = textureLoader.load('./8k_stars_milky_way.jpg' );
-        scene.background = starTexture;
 
-        // إنشاء الشمس
-        const sunGeometry = new THREE.SphereGeometry(16, 30, 30);
-        const sunTexture = textureLoader.load('./8k_sun.jpg' );
-        const sunMaterial = new THREE.MeshBasicMaterial({ map: sunTexture });
+        // 3. إنشاء الشمس
+        const sunGeometry = new THREE.SphereGeometry(16, 64, 64);
+        const sunMaterial = new THREE.MeshBasicMaterial({ map: textureLoader.load('./8k_sun.jpg') });
         const sun = new THREE.Mesh(sunGeometry, sunMaterial);
         scene.add(sun);
 
-        // إضافة ضوء نقطي من الشمس
-        const pointLight = new THREE.PointLight(0xffffff, 3, 300);
+        // الإضاءة
+        const pointLight = new THREE.PointLight(0xffffff, 2.5, 3000);
+        pointLight.castShadow = true;
         scene.add(pointLight);
-
-        // إضافة ضوء محيطي خافت
-        const ambientLight = new THREE.AmbientLight(0x333333);
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
         scene.add(ambientLight);
 
+        // 4. تأثير التوهج (Bloom)
+        const composer = new EffectComposer(renderer);
+        const renderPass = new RenderPass(scene, camera);
+        composer.addPass(renderPass);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        composer.addPass(bloomPass);
+
         // دالة لإنشاء الكواكب
-        function createPlanet(size, textureUrl, position, ring) {
-            const geometry = new THREE.SphereGeometry(size, 30, 30);
-            const texture = textureLoader.load(textureUrl);
-            const material = new THREE.MeshStandardMaterial({ map: texture });
+        function createPlanet({ name, size, textureUrl, position, ring, normalMap, specularMap, clouds }) {
+            const geometry = new THREE.SphereGeometry(size, 64, 64);
+            const material = new THREE.MeshStandardMaterial({
+                map: textureLoader.load(textureUrl),
+                normalMap: normalMap ? textureLoader.load(normalMap) : null,
+                specularMap: specularMap ? textureLoader.load(specularMap) : null,
+                metalness: 0.1,
+                roughness: 0.8
+            });
             const planet = new THREE.Mesh(geometry, material);
+            planet.receiveShadow = true;
+            planet.castShadow = true;
             
             const obj = new THREE.Object3D();
             obj.add(planet);
             
             if (ring) {
-                const ringGeo = new THREE.RingGeometry(ring.innerRadius, ring.outerRadius, 32);
-                const ringTexture = textureLoader.load(ring.textureUrl);
-                const ringMat = new THREE.MeshBasicMaterial({
-                    map: ringTexture,
-                    side: THREE.DoubleSide,
-                    transparent: true
-                });
+                const ringGeo = new THREE.RingGeometry(ring.innerRadius, ring.outerRadius, 64);
+                const ringMat = new THREE.MeshStandardMaterial({ map: textureLoader.load(ring.textureUrl), side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
                 const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+                ringMesh.receiveShadow = true;
                 obj.add(ringMesh);
                 ringMesh.rotation.x = -0.5 * Math.PI;
             }
 
+            let cloudsMesh;
+            if (clouds) {
+                const cloudGeo = new THREE.SphereGeometry(size + 0.05, 64, 64);
+                const cloudMat = new THREE.MeshStandardMaterial({ map: textureLoader.load(clouds.textureUrl), transparent: true, opacity: 0.5 });
+                cloudsMesh = new THREE.Mesh(cloudGeo, cloudMat);
+                planet.add(cloudsMesh);
+            }
+            
+            if (name === 'الأرض') {
+                const atmosphereGeo = new THREE.SphereGeometry(size + 0.2, 64, 64);
+                const atmosphereMat = new THREE.ShaderMaterial({
+                    vertexShader: `varying vec3 vNormal; void main() { vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+                    fragmentShader: `varying vec3 vNormal; void main() { float intensity = pow(0.5 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.0); gl_FragColor = vec4(0.3, 0.6, 1.0, 1.0) * intensity; }`,
+                    blending: THREE.AdditiveBlending,
+                    side: THREE.BackSide
+                });
+                const atmosphere = new THREE.Mesh(atmosphereGeo, atmosphereMat);
+                planet.add(atmosphere);
+            }
+
             planet.position.x = position;
             scene.add(obj);
-            return { mesh: planet, obj: obj };
+
+            const orbitGeo = new THREE.TorusGeometry(position, 0.05, 16, 100);
+            const orbitMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
+            const orbit = new THREE.Mesh(orbitGeo, orbitMat);
+            orbit.rotation.x = Math.PI / 2;
+            scene.add(orbit);
+
+            return { mesh: planet, obj: obj, clouds: cloudsMesh };
         }
 
-        // إنشاء الكواكب
-        const mercury = createPlanet(3.2, './8k_mercury.jpg', 28 );
-        const venus = createPlanet(5.8, './8k_venus_surface.jpg', 44 );
-        const earth = createPlanet(6, './8k_earth_daymap.jpg', 62 );
-        const mars = createPlanet(4, './8k_mars.jpg', 78 );
-        const jupiter = createPlanet(12, './8k_jupiter.jpg', 100 );
-        const saturn = createPlanet(10, './8k_saturn.jpg', 138, {
-            innerRadius: 10,
-            outerRadius: 20,
-            textureUrl: './8k_saturn_ring_alpha.png'
-        } );
-        const uranus = createPlanet(7, './2k_uranus.jpg', 176, {
-            innerRadius: 7,
-            outerRadius: 12,
-            textureUrl: './2k_uranus_ring_alpha.png'
-        } );
-        const neptune = createPlanet(7, './2k_neptune.jpg', 200 );
+        // إنشاء الكواكب بالمسارات المحلية
+        const planetsData = [
+            { name: 'عطارد', size: 3.2, textureUrl: './8k_mercury.jpg', position: 38 },
+            { name: 'الزهرة', size: 5.8, textureUrl: './8k_venus_surface.jpg', position: 72 },
+            { name: 'الأرض', size: 6, textureUrl: './8k_earth_daymap.jpg', position: 100,
+                normalMap: './earth_normal.jpg',
+                specularMap: './earth_specular.jpg',
+                clouds: { textureUrl: './earth_clouds.png' } },
+            { name: 'المريخ', size: 4, textureUrl: './8k_mars.jpg', position: 152 },
+            { name: 'المشتري', size: 12, textureUrl: './8k_jupiter.jpg', position: 220 },
+            { name: 'زحل', size: 10, textureUrl: './8k_saturn.jpg', position: 350,
+                ring: { innerRadius: 12, outerRadius: 22, textureUrl: './8k_saturn_ring_alpha.png' } },
+            { name: 'أورانوس', size: 7, textureUrl: './2k_uranus.jpg', position: 500,
+                ring: { innerRadius: 8, outerRadius: 13, textureUrl: './2k_uranus_ring_alpha.png' } },
+            { name: 'نبتون', size: 7, textureUrl: './2k_neptune.jpg', position: 650 }
+        ];
 
-        // إضافة تسميات للكواكب
-        function addLabel(name, object) {
+        const planets = planetsData.map(p => createPlanet(p));
+
+        // إضافة التسميات
+        planets.forEach((p, i) => {
             const div = document.createElement('div');
             div.className = 'label';
-            div.textContent = name;
+            div.textContent = planetsData[i].name;
             const label = new CSS2DObject(div);
-            label.position.set(0, object.geometry.parameters.radius + 2, 0);
-            object.add(label);
-        }
+            label.position.set(0, p.mesh.geometry.parameters.radius + 2, 0);
+            p.mesh.add(label);
+        });
 
-        addLabel('عطارد', mercury.mesh);
-        addLabel('الزهرة', venus.mesh);
-        addLabel('الأرض', earth.mesh);
-        addLabel('المريخ', mars.mesh);
-        addLabel('المشتري', jupiter.mesh);
-        addLabel('زحل', saturn.mesh);
-        addLabel('أورانوس', uranus.mesh);
-        addLabel('نبتون', neptune.mesh);
-
-        camera.position.z = 250;
-        camera.position.y = 50;
+        camera.position.set(-90, 140, 400);
         camera.lookAt(scene.position);
 
-        // حلقة التحريك
+        const clock = new THREE.Clock();
         function animate() {
             requestAnimationFrame(animate);
+            const delta = clock.getDelta();
 
             // دوران الكواكب حول نفسها
-            sun.rotateY(0.004);
-            mercury.mesh.rotateY(0.004);
-            venus.mesh.rotateY(0.002);
-            earth.mesh.rotateY(0.02);
-            mars.mesh.rotateY(0.018);
-            jupiter.mesh.rotateY(0.04);
-            saturn.mesh.rotateY(0.038);
-            uranus.mesh.rotateY(0.03);
-            neptune.mesh.rotateY(0.032);
+            sun.rotation.y += 0.001;
+            planets[0].mesh.rotation.y += 0.004; // Mercury
+            planets[1].mesh.rotation.y += 0.002; // Venus
+            planets[2].mesh.rotation.y += 0.02;  // Earth
+            if (planets[2].clouds) planets[2].clouds.rotation.y += 0.015;
+            planets[3].mesh.rotation.y += 0.018; // Mars
+            planets[4].mesh.rotation.y += 0.04;  // Jupiter
+            planets[5].mesh.rotation.y += 0.038; // Saturn
+            planets[6].mesh.rotation.y += 0.03;  // Uranus
+            planets[7].mesh.rotation.y += 0.032; // Neptune
 
             // دوران الكواكب حول الشمس
-            mercury.obj.rotateY(0.04);
-            venus.obj.rotateY(0.015);
-            earth.obj.rotateY(0.01);
-            mars.obj.rotateY(0.008);
-            jupiter.obj.rotateY(0.002);
-            saturn.obj.rotateY(0.0009);
-            uranus.obj.rotateY(0.0004);
-            neptune.obj.rotateY(0.0001);
+            const orbitSpeeds = [0.04, 0.015, 0.01, 0.008, 0.002, 0.0009, 0.0004, 0.0001];
+            planets.forEach((p, i) => {
+                p.obj.rotation.y += orbitSpeeds[i] * 0.5; // يمكنك تعديل هذه القيمة لتسريع أو إبطاء المدارات
+            });
 
             controls.update();
-            renderer.render(scene, camera);
+            composer.render();
             labelRenderer.render(scene, camera);
         }
 
         animate();
 
-        // تحديث حجم العرض عند تغيير حجم النافذة
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
             labelRenderer.setSize(window.innerWidth, window.innerHeight);
         });
     </script>
